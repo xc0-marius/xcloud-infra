@@ -5,8 +5,16 @@ BASE="/opt/xcloud-infra"
 COMPOSE_FILE="${BASE}/compose.yml"
 ENV_FILE="${BASE}/.env"
 LOCK_FILE="/tmp/xcloud-infra-stack.lock"
+COMPOSE_EXTRA_FILES="${COMPOSE_EXTRA_FILES:-}"
 
 cd "${BASE}"
+
+COMPOSE_ARGS=(--env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
+if [[ -n "${COMPOSE_EXTRA_FILES}" ]]; then
+  for extra_file in ${COMPOSE_EXTRA_FILES}; do
+    COMPOSE_ARGS+=(-f "${extra_file}")
+  done
+fi
 
 exec 9>"${LOCK_FILE}"
 if ! flock -n 9; then
@@ -15,7 +23,7 @@ if ! flock -n 9; then
 fi
 
 compose() {
-  docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
+  docker compose "${COMPOSE_ARGS[@]}" "$@"
 }
 
 set_env() {
