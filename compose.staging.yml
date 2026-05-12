@@ -1,0 +1,23 @@
+services:
+  traefik:
+    command:
+      - --log.level=INFO
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy_net
+      - --providers.file.filename=/etc/traefik/traefik-dynamic.yaml
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0
+      - --certificatesresolvers.desec.acme.email=admin@xcloud.gg
+      - --certificatesresolvers.desec.acme.storage=/letsencrypt/acme-staging.json
+      - --certificatesresolvers.desec.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      - --certificatesresolvers.desec.acme.dnschallenge=true
+      - --certificatesresolvers.desec.acme.dnschallenge.provider=desec
