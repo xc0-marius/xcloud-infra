@@ -33,7 +33,7 @@ cd "${BASE}"
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 acme traefik scripts
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 db/data redis/data
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 authentik/media authentik/custom-templates authentik/certs
-install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 netbird/config
+install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 netbird/config netbird/certs
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 teamspeak/data pgadmin/data dockge/data
 
 if [[ ! -f "${ENV_FILE}" ]]; then
@@ -56,11 +56,16 @@ set_env() {
   rm -f "${tmp}"
 }
 
+get_env() {
+  local key="$1"
+  grep -E "^${key}=" "${ENV_FILE}" 2>/dev/null | tail -n 1 | cut -d '=' -f2- || true
+}
+
 needs_env() {
   local key="$1"
   local value
-  value="$(grep -E "^${key}=" "${ENV_FILE}" 2>/dev/null | tail -n 1 | cut -d '=' -f2- || true)"
-  [[ -z "${value}" || "${value}" =~ ^change_me || "${value}" =~ ^CHANGE_ME || "${value}" =~ ^todo || "${value}" =~ ^TODO ]]
+  value="$(get_env "${key}")"
+  [[ -z "${value}" || "${value}" =~ ^change_me || "${value}" =~ ^CHANGE_ME || "${value}" =~ ^todo || "${value}" =~ ^TODO || "${value}" == "__GENERATE_ON_UP__" ]]
 }
 
 rand_hex() { openssl rand -hex "${1:-32}"; }
@@ -158,6 +163,47 @@ else
   echo "Preserved DESEC_TOKEN."
 fi
 
+if needs_env NETBIRD_OWNER_EMAIL; then
+  set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird initial admin email" "admin@xcloud.gg")"
+else
+  echo "Preserved NETBIRD_OWNER_EMAIL."
+fi
+
+if needs_env NETBIRD_OWNER_PASSWORD; then
+  echo "Enter NetBird initial admin password. Leave blank to generate a strong random value."
+  netbird_owner_value="$(ask_hidden_twice "NetBird admin password")"
+  if [[ -z "${netbird_owner_value}" ]]; then
+    netbird_owner_value="$(rand_hex 24)"
+    echo "Generated NETBIRD_OWNER_PASSWORD."
+  else
+    echo "Stored NETBIRD_OWNER_PASSWORD."
+  fi
+  set_env NETBIRD_OWNER_PASSWORD "${netbird_owner_value}"
+  unset netbird_owner_value
+else
+  echo "Preserved NETBIRD_OWNER_PASSWORD."
+fi
+
+if needs_env NETBIRD_AUTH_SECRET; then
+  set_env NETBIRD_AUTH_SECRET "$(rand_hex 32)"
+  echo "Generated NETBIRD_AUTH_SECRET."
+fi
+
+if needs_env NETBIRD_STORE_ENCRYPTION_KEY; then
+  set_env NETBIRD_STORE_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr -d '\n')"
+  echo "Generated NETBIRD_STORE_ENCRYPTION_KEY."
+fi
+
+if needs_env NETBIRD_IDP_SESSION_KEY; then
+  set_env NETBIRD_IDP_SESSION_KEY "$(rand_hex 16)"
+  echo "Generated NETBIRD_IDP_SESSION_KEY."
+fi
+
+if needs_env NETBIRD_PROXY_TOKEN; then
+  set_env NETBIRD_PROXY_TOKEN "__GENERATE_ON_UP__"
+  echo "Marked NETBIRD_PROXY_TOKEN for automatic generation by up.sh."
+fi
+
 echo
 admin_user="$(ask_text "Basic Auth username for pgAdmin and Dockge" "xcloud")"
 admin_secret="$(ask_hidden_twice "Basic Auth password")"
@@ -170,9 +216,15 @@ unset admin_secret
 
 echo "Created ${AUTH_USERS_FILE}."
 
-if [[ ! -f acme/acme.json ]]; then
-  touch acme/acme.json
+if [[ -d acme/acme.json ]]; then
+  echo "acme/acme.json is a directory; remove it and rerun prepare.sh."
+  exit 1
 fi
+if [[ ! -f acme/acme.json ]]; then
+  install -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0600 /dev/null acme/acme.json
+fi
+chmod 0600 acme/acme.json
+chown "${STACK_USER}:${STACK_GROUP}" acme/acme.json
 
 cat > traefik/traefik-dynamic.yaml <<'EOF'
 http:
@@ -190,28 +242,78 @@ http:
         contentTypeNosniff: true
 EOF
 
-if [[ ! -f netbird/config/config.yaml ]]; then
-  cat > netbird/config/config.yaml <<'EOF'
-# TODO: Replace this placeholder with your real NetBird management config.
-# Public management URL: https://netbird.xcloud.gg
-# VPS public IP: 46.225.19.105
-EOF
-fi
+netbird_owner_email="$(get_env NETBIRD_OWNER_EMAIL)"
+netbird_owner_password="$(get_env NETBIRD_OWNER_PASSWORD)"
+netbird_auth_secret="$(get_env NETBIRD_AUTH_SECRET)"
+netbird_store_key="$(get_env NETBIRD_STORE_ENCRYPTION_KEY)"
+netbird_session_key="$(get_env NETBIRD_IDP_SESSION_KEY)"
 
-if [[ ! -f netbird/dashboard.env ]]; then
-  cat > netbird/dashboard.env <<'EOF'
-# TODO: Fill with your NetBird dashboard environment.
-# Public URL: https://netbird.xcloud.gg
-# Authentik URL: https://auth.xcloud.gg
-EOF
-fi
+cat > netbird/config/config.yaml <<EOF
+server:
+  listenAddress: ":80"
+  exposedAddress: "https://netbird.xcloud.gg:443"
+  stunPorts:
+    - 3478
+  metricsPort: 9090
+  healthcheckAddress: ":9000"
+  logLevel: "info"
+  logFile: "console"
+  authSecret: "${netbird_auth_secret}"
+  dataDir: "/var/lib/netbird/"
+  disableAnonymousMetrics: true
+  disableGeoliteUpdate: false
 
-if [[ ! -f netbird/proxy.env ]]; then
-  cat > netbird/proxy.env <<'EOF'
-# TODO: Fill with your NetBird reverse-proxy environment.
-# Expected DNS: *.netbird.xcloud.gg -> 46.225.19.105
+  auth:
+    issuer: "https://netbird.xcloud.gg/oauth2"
+    localAuthDisabled: false
+    signKeyRefreshEnabled: true
+    sessionCookieEncryptionKey: "${netbird_session_key}"
+    dashboardRedirectURIs:
+      - "https://netbird.xcloud.gg/nb-auth"
+      - "https://netbird.xcloud.gg/nb-silent-auth"
+    cliRedirectURIs:
+      - "http://localhost:53000/"
+    owner:
+      email: "${netbird_owner_email}"
+      password: "${netbird_owner_password}"
+
+  store:
+    engine: "sqlite"
+    dsn: ""
+    encryptionKey: "${netbird_store_key}"
 EOF
-fi
+
+cat > netbird/dashboard.env <<'EOF'
+NETBIRD_MGMT_API_ENDPOINT=https://netbird.xcloud.gg
+NETBIRD_MGMT_GRPC_API_ENDPOINT=https://netbird.xcloud.gg
+AUTH_AUDIENCE=netbird-dashboard
+AUTH_CLIENT_ID=netbird-dashboard
+AUTH_CLIENT_SECRET=
+AUTH_AUTHORITY=https://netbird.xcloud.gg/oauth2
+USE_AUTH0=false
+AUTH_SUPPORTED_SCOPES=openid profile email groups
+AUTH_REDIRECT_URI=/nb-auth
+AUTH_SILENT_REDIRECT_URI=/nb-silent-auth
+NGINX_SSL_PORT=443
+LETSENCRYPT_DOMAIN=none
+LETSENCRYPT_EMAIL=admin@xcloud.gg
+EOF
+
+proxy_token="$(get_env NETBIRD_PROXY_TOKEN)"
+cat > netbird/proxy.env <<EOF
+NB_PROXY_DOMAIN=netbird.xcloud.gg
+NB_PROXY_TOKEN=${proxy_token}
+NB_PROXY_MANAGEMENT_ADDRESS=http://netbird-server:80
+NB_PROXY_ALLOW_INSECURE=true
+NB_PROXY_ADDRESS=:8443
+NB_PROXY_ACME_CERTIFICATES=true
+NB_PROXY_ACME_CHALLENGE_TYPE=tls-alpn-01
+NB_PROXY_CERTIFICATE_DIRECTORY=/certs
+NB_PROXY_FORWARDED_PROTO=https
+NB_LOG_LEVEL=info
+EOF
+
+unset netbird_owner_password netbird_auth_secret netbird_store_key netbird_session_key proxy_token
 
 chown -R "${STACK_USER}:${STACK_GROUP}" \
   acme traefik db redis authentik netbird teamspeak dockge scripts compose.yml .env.example
@@ -219,14 +321,17 @@ chown -R "${STACK_USER}:${STACK_GROUP}" \
 chown "${STACK_USER}:${STACK_GROUP}" "${ENV_FILE}"
 chown -R 5050:5050 pgadmin/data
 
-chmod 0750 scripts/*.sh
-chmod 0640 compose.yml .env.example "${ENV_FILE}"
-chmod 0640 traefik/traefik-dynamic.yaml "${AUTH_USERS_FILE}"
-chmod 0640 netbird/config/config.yaml netbird/dashboard.env netbird/proxy.env
+find . -type d -not -path './.git*' -exec chmod 0750 {} +
+find . -type f -not -path './.git*' -exec chmod 0640 {} +
+find scripts -type f -name '*.sh' -exec chmod 0750 {} +
 chmod 0600 acme/acme.json
+chmod 0640 "${AUTH_USERS_FILE}" "${ENV_FILE}"
+
+if command -v docker >/dev/null 2>&1; then
+  docker compose --env-file "${ENV_FILE}" -f compose.yml config >/dev/null
+fi
 
 echo
 echo "Prepared ${BASE}."
-echo "Updated ${ENV_FILE}."
-echo "Created Traefik Basic Auth users file at ${AUTH_USERS_FILE}."
-echo "Next: fill real NetBird config/env files, then run ${BASE}/scripts/up.sh"
+echo "Generated .env values, NetBird config/env files, Traefik dynamic config, and ACME state file."
+echo "Next command can be: ${BASE}/scripts/up.sh"
