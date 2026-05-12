@@ -10,6 +10,7 @@ authentik/certs/
 teamspeak/data/
 pgadmin/data/
 dockge/data/
+netbird/certs/
 netbird/config/config.yaml
 netbird/dashboard.env
 netbird/proxy.env
