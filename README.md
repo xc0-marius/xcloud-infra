@@ -1,13 +1,17 @@
 # xCloud Infrastructure
 
-Docker Compose stack for the xCloud VPS.
+Docker Compose stack for `xcloud.gg` on the Hetzner VPS `46.225.19.105`.
 
-## Server target
+## Services
 
-- VPS IP: `46.225.19.105`
-- Server user: `xcloud`
-- Install path: `/opt/xcloud-infra`
-- Domain: `xcloud.gg`
+- Traefik with deSEC DNS-01 ACME
+- PostgreSQL
+- Redis
+- Authentik
+- NetBird server, dashboard, and reverse proxy
+- TeamSpeak 6
+- pgAdmin
+- Dockge
 
 ## Expected DNS
 
@@ -21,44 +25,58 @@ pgadmin.xcloud.gg
 dockhand.xcloud.gg
 ```
 
-## First deploy on the VPS
+## Clone to the VPS
+
+Run as user `xcloud`:
 
 ```bash
 cd /opt
 sudo git clone https://github.com/xc0-marius/xcloud-infra.git
-sudo bash /opt/xcloud-infra/scripts/init-paths.sh
+sudo chown -R xcloud:xcloud /opt/xcloud-infra
 cd /opt/xcloud-infra
-sudo -u xcloud cp .env.example .env
-sudo -u xcloud nano .env
-sudo -u xcloud nano netbird/config/config.yaml
-sudo -u xcloud nano netbird/dashboard.env
-sudo -u xcloud nano netbird/proxy.env
-sudo -u xcloud bash scripts/up.sh
+sudo ./scripts/prepare.sh
 ```
 
-If the repo already exists:
+Then edit secrets and NetBird configuration:
+
+```bash
+sudo nano /opt/xcloud-infra/.env
+sudo nano /opt/xcloud-infra/netbird/config/config.yaml
+sudo nano /opt/xcloud-infra/netbird/dashboard.env
+sudo nano /opt/xcloud-infra/netbird/proxy.env
+```
+
+## Start the stack
 
 ```bash
 cd /opt/xcloud-infra
-git pull
-sudo bash scripts/init-paths.sh
-sudo -u xcloud bash scripts/up.sh
+./scripts/up.sh
 ```
 
-## Scripts
+## Stop the stack
 
 ```bash
-bash scripts/init-paths.sh   # create folders, touch required files, fix ownership and permissions
-bash scripts/up.sh           # safe start with dependency waits
-bash scripts/down.sh         # stop stack in service-safe order
-bash scripts/restart.sh      # down then up
-bash scripts/nuke.sh         # destructive Docker-volume/image rebuild
+./scripts/down.sh
 ```
 
-For a full destructive rebuild that also wipes bind-mounted app data:
+## Restart the stack
 
 ```bash
-PURGE_BIND_DATA=1 bash scripts/nuke.sh
+./scripts/restart.sh
+```
+
+## Destructive rebuild
+
+This removes Compose-managed containers, named volumes, orphan containers, and images referenced by the compose file. Bind-mounted application data is preserved by default.
+
+```bash
+./scripts/nuke.sh
+```
+
+To also purge bind-mounted app data:
+
+```bash
+PURGE_BIND_DATA=1 ./scripts/nuke.sh
 ```
 
 ## Required firewall ports
@@ -71,6 +89,8 @@ PURGE_BIND_DATA=1 bash scripts/nuke.sh
 30033/tcp
 ```
 
-## Secrets
+## Notes
 
-Do not commit `.env`. The repo contains `.env.example` only.
+- `.env`, `acme/acme.json`, and NetBird runtime config files are intentionally gitignored.
+- `scripts/prepare.sh` creates missing runtime files and sets ownership/permissions.
+- `pgadmin/data` is owned by UID/GID `5050:5050` because the pgAdmin container writes as that user.
