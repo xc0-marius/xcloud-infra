@@ -18,10 +18,30 @@ compose() {
   docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"
 }
 
+set_env() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    BEGIN { found = 0 }
+    $0 ~ "^" key "=" { print key "=" value; found = 1; next }
+    { print }
+    END { if (found == 0) print key "=" value }
+  ' "${ENV_FILE}" > "${tmp}"
+  cat "${tmp}" > "${ENV_FILE}"
+  rm -f "${tmp}"
+}
+
+get_env() {
+  local key="$1"
+  grep -E "^${key}=" "${ENV_FILE}" 2>/dev/null | tail -n 1 | cut -d '=' -f2- || true
+}
+
 fail_if_placeholder_env() {
   local bad=0
 
-  for key in PG_PASS AUTHENTIK_SECRET_KEY DESEC_TOKEN PGADMIN_DEFAULT_EMAIL PGADMIN_DEFAULT_PASSWORD; do
+  for key in PG_PASS AUTHENTIK_SECRET_KEY DESEC_TOKEN PGADMIN_DEFAULT_EMAIL PGADMIN_DEFAULT_PASSWORD NETBIRD_OWNER_EMAIL NETBIRD_OWNER_PASSWORD NETBIRD_AUTH_SECRET NETBIRD_STORE_ENCRYPTION_KEY NETBIRD_IDP_SESSION_KEY NETBIRD_PROXY_TOKEN; do
     if ! grep -qE "^${key}=" "${ENV_FILE}"; then
       echo "Missing required .env key: ${key}"
       bad=1
@@ -34,7 +54,7 @@ fail_if_placeholder_env() {
   fi
 
   if [[ "${bad}" -ne 0 ]]; then
-    echo "Edit ${ENV_FILE} first."
+    echo "Run: sudo ${BASE}/scripts/prepare.sh"
     exit 1
   fi
 }
@@ -104,6 +124,52 @@ wait_healthy() {
   exit 1
 }
 
+sync_netbird_proxy_env() {
+  local token
+  token="$(get_env NETBIRD_PROXY_TOKEN)"
+
+  cat > "${BASE}/netbird/proxy.env" <<EOF
+NB_PROXY_DOMAIN=netbird.xcloud.gg
+NB_PROXY_TOKEN=${token}
+NB_PROXY_MANAGEMENT_ADDRESS=https://netbird.xcloud.gg:443
+NB_PROXY_ADDRESS=:8443
+NB_PROXY_ACME_CERTIFICATES=true
+NB_PROXY_ACME_CHALLENGE_TYPE=tls-alpn-01
+NB_PROXY_CERTIFICATE_DIRECTORY=/certs
+NB_LOG_LEVEL=info
+EOF
+
+  chown xcloud:xcloud "${BASE}/netbird/proxy.env"
+  chmod 0640 "${BASE}/netbird/proxy.env"
+}
+
+generate_netbird_proxy_token_if_needed() {
+  local token
+  local output
+
+  token="$(get_env NETBIRD_PROXY_TOKEN)"
+
+  if [[ "${token}" != "__GENERATE_ON_UP__" ]]; then
+    sync_netbird_proxy_env
+    return 0
+  fi
+
+  echo "Generating NetBird proxy access token..."
+
+  output="$(docker exec netbird-server /go/bin/netbird-server token create --name "xcloud-proxy" --config /etc/netbird/config.yaml 2>&1 || true)"
+  token="$(printf '%s\n' "${output}" | grep -Eo 'nbx_[A-Za-z0-9._-]+' | head -n 1 || true)"
+
+  if [[ -z "${token}" ]]; then
+    echo "Failed to generate NetBird proxy token. netbird-server output:"
+    printf '%s\n' "${output}"
+    exit 1
+  fi
+
+  set_env NETBIRD_PROXY_TOKEN "${token}"
+  sync_netbird_proxy_env
+  echo "Generated and stored NETBIRD_PROXY_TOKEN."
+}
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   echo "Missing ${ENV_FILE}. Run: sudo ${BASE}/scripts/prepare.sh"
   exit 1
@@ -131,9 +197,14 @@ compose up -d authentik-server authentik-worker
 wait_running authentik-server 180
 wait_running authentik-worker 180
 
-echo "Starting NetBird..."
+echo "Starting NetBird server..."
 compose up -d netbird-server
-wait_running netbird-server 180
+wait_running netbird-server 240
+sleep 8
+
+generate_netbird_proxy_token_if_needed
+
+echo "Starting NetBird dashboard and proxy..."
 compose up -d netbird-dashboard netbird-proxy
 wait_running netbird-dashboard 120
 wait_running netbird-proxy 120
