@@ -2,7 +2,7 @@
 *.env
 !*.env.example
 acme/acme.json
-traefik/basic-auth.htpasswd
+traefik/basic-auth.users
 db/data/
 redis/data/
 authentik/media/
