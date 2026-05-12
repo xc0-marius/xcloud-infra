@@ -1,0 +1,10 @@
+# Optional Traefik dynamic config example.
+# Copy to traefik/traefik-dynamic.yaml on the server if prepare.sh has not already created it.
+
+# http:
+#   middlewares:
+#     secure-headers:
+#       headers:
+#         stsSeconds: 31536000
+#         stsIncludeSubdomains: true
+#         stsPreload: true
