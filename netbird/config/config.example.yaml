@@ -1,0 +1,8 @@
+# TODO: Replace with your real NetBird management config.
+# Public management URL: https://netbird.xcloud.gg
+# VPS public IP: 46.225.19.105
+#
+# On the server, prepare.sh creates:
+#   netbird/config/config.yaml
+#
+# That file is gitignored because it can contain private configuration.
