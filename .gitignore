@@ -1,0 +1,14 @@
+.env
+*.env
+!*.env.example
+acme/acme.json
+db/data/
+redis/data/
+authentik/media/
+authentik/certs/
+teamspeak/data/
+pgadmin/data/
+dockge/data/
+netbird/config/config.yaml
+netbird/dashboard.env
+netbird/proxy.env
