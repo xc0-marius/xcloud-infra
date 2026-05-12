@@ -1,0 +1,281 @@
+x-logging-defaults: &logging-defaults
+  driver: "json-file"
+  options:
+    max-size: "200m"
+    max-file: "2"
+
+x-authentik-common: &authentik-common
+  image: ghcr.io/goauthentik/server:2025.4.4
+  restart: unless-stopped
+  environment:
+    AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?authentik secret key required}
+    AUTHENTIK_REDIS__HOST: redis
+    AUTHENTIK_POSTGRESQL__HOST: postgres
+    AUTHENTIK_POSTGRESQL__USER: authentik
+    AUTHENTIK_POSTGRESQL__NAME: authentik
+    AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS:?postgres password required}
+    TZ: Europe/Oslo
+  volumes:
+    - ./authentik/media:/media
+    - ./authentik/custom-templates:/templates
+    - ./authentik/certs:/certs
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  logging: *logging-defaults
+
+services:
+  traefik:
+    image: traefik:v3.7
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --log.level=INFO
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy_net
+      - --providers.file.filename=/etc/traefik/traefik-dynamic.yaml
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.transport.respondingTimeouts.readTimeout=0
+      - --entrypoints.websecure.transport.respondingTimeouts.writeTimeout=0
+      - --entrypoints.websecure.transport.respondingTimeouts.idleTimeout=0
+      - --certificatesresolvers.desec.acme.email=admin@xcloud.gg
+      - --certificatesresolvers.desec.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.desec.acme.dnschallenge=true
+      - --certificatesresolvers.desec.acme.dnschallenge.provider=desec
+    environment:
+      DESEC_TOKEN: ${DESEC_TOKEN:?deSEC token required}
+      TZ: Europe/Oslo
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./acme:/letsencrypt
+      - ./traefik/traefik-dynamic.yaml:/etc/traefik/traefik-dynamic.yaml:ro
+    networks:
+      - proxy_net
+    logging: *logging-defaults
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASS:?postgres password required}
+      POSTGRES_USER: authentik
+      POSTGRES_DB: authentik
+      TZ: Europe/Oslo
+    volumes:
+      - ./db/data:/var/lib/postgresql/data
+    networks:
+      - db_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER} || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging: *logging-defaults
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - ./redis/data:/data
+    networks:
+      - db_net
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    logging: *logging-defaults
+
+  authentik-server:
+    <<: *authentik-common
+    container_name: authentik-server
+    command: server
+    networks:
+      - proxy_net
+      - db_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.http.routers.authentik.rule=Host(`auth.xcloud.gg`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls=true"
+      - "traefik.http.routers.authentik.tls.certresolver=desec"
+      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+
+  authentik-worker:
+    <<: *authentik-common
+    container_name: authentik-worker
+    command: worker
+    networks:
+      - db_net
+
+  netbird-server:
+    image: netbirdio/netbird-server:latest
+    container_name: netbird-server
+    restart: unless-stopped
+    environment:
+      NB_LOG_LEVEL: info
+      TZ: Europe/Oslo
+    networks:
+      - proxy_net
+    ports:
+      - "3478:3478/udp"
+    volumes:
+      - ./netbird/config/config.yaml:/etc/netbird/config.yaml:ro
+      - netbird_data:/var/lib/netbird
+    command: ["--config", "/etc/netbird/config.yaml"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.http.routers.netbird-grpc.rule=Host(`netbird.xcloud.gg`) && (PathPrefix(`/signalexchange.SignalExchange/`) || PathPrefix(`/management.ManagementService/`) || PathPrefix(`/management.ProxyService/`))"
+      - "traefik.http.routers.netbird-grpc.entrypoints=websecure"
+      - "traefik.http.routers.netbird-grpc.tls=true"
+      - "traefik.http.routers.netbird-grpc.tls.certresolver=desec"
+      - "traefik.http.routers.netbird-grpc.service=netbird-server-h2c"
+      - "traefik.http.routers.netbird-grpc.priority=100"
+      - "traefik.http.routers.netbird-backend.rule=Host(`netbird.xcloud.gg`) && (PathPrefix(`/relay`) || PathPrefix(`/ws-proxy/`) || PathPrefix(`/api`) || PathPrefix(`/oauth2`))"
+      - "traefik.http.routers.netbird-backend.entrypoints=websecure"
+      - "traefik.http.routers.netbird-backend.tls=true"
+      - "traefik.http.routers.netbird-backend.tls.certresolver=desec"
+      - "traefik.http.routers.netbird-backend.service=netbird-server-http"
+      - "traefik.http.routers.netbird-backend.priority=100"
+      - "traefik.http.services.netbird-server-http.loadbalancer.server.port=80"
+      - "traefik.http.services.netbird-server-h2c.loadbalancer.server.port=80"
+      - "traefik.http.services.netbird-server-h2c.loadbalancer.server.scheme=h2c"
+    logging: *logging-defaults
+
+  netbird-dashboard:
+    image: netbirdio/dashboard:latest
+    container_name: netbird-dashboard
+    restart: unless-stopped
+    env_file:
+      - ./netbird/dashboard.env
+    networks:
+      - proxy_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.http.routers.netbird-dash.rule=Host(`netbird.xcloud.gg`)"
+      - "traefik.http.routers.netbird-dash.entrypoints=websecure"
+      - "traefik.http.routers.netbird-dash.tls=true"
+      - "traefik.http.routers.netbird-dash.tls.certresolver=desec"
+      - "traefik.http.routers.netbird-dash.priority=1"
+      - "traefik.http.services.netbird-dash.loadbalancer.server.port=80"
+    logging: *logging-defaults
+
+  netbird-proxy:
+    image: netbirdio/reverse-proxy:latest
+    container_name: netbird-proxy
+    restart: unless-stopped
+    depends_on:
+      - netbird-server
+    env_file:
+      - ./netbird/proxy.env
+    networks:
+      - proxy_net
+    volumes:
+      - netbird_proxy_certs:/certs
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.entrypoints=websecure"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.rule=HostSNI(`*.netbird.xcloud.gg`)"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.tls.passthrough=true"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.service=netbird-proxy-tls"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.priority=1"
+      - "traefik.tcp.services.netbird-proxy-tls.loadbalancer.server.port=8443"
+    logging: *logging-defaults
+
+  teamspeak6:
+    image: teamspeaksystems/teamspeak6-server:latest
+    container_name: teamspeak6
+    restart: unless-stopped
+    environment:
+      TSSERVER_LICENSE_ACCEPTED: accept
+      TSSERVER_DEFAULT_PORT: 9987
+      TSSERVER_FILE_TRANSFER_PORT: 30033
+      TZ: Europe/Oslo
+    ports:
+      - "9987:9987/udp"
+      - "30033:30033/tcp"
+    volumes:
+      - ./teamspeak/data:/var/tsserver
+    networks:
+      - proxy_net
+    logging: *logging-defaults
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: pgadmin
+    user: "5050:5050"
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?pgAdmin email required}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?pgAdmin password required}
+      TZ: Europe/Oslo
+    volumes:
+      - ./pgadmin/data:/var/lib/pgadmin
+    networks:
+      - proxy_net
+      - db_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.http.routers.pgadmin.rule=Host(`pgadmin.xcloud.gg`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls=true"
+      - "traefik.http.routers.pgadmin.tls.certresolver=desec"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+    logging: *logging-defaults
+
+  dockhand:
+    image: louislam/dockge:1
+    container_name: dockhand
+    restart: unless-stopped
+    environment:
+      DOCKGE_STACKS_DIR: /opt/xcloud-infra
+      TZ: Europe/Oslo
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/xcloud-infra:/opt/xcloud-infra
+      - ./dockge/data:/app/data
+    networks:
+      - proxy_net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy_net"
+      - "traefik.http.routers.dockhand.rule=Host(`dockhand.xcloud.gg`)"
+      - "traefik.http.routers.dockhand.entrypoints=websecure"
+      - "traefik.http.routers.dockhand.tls=true"
+      - "traefik.http.routers.dockhand.tls.certresolver=desec"
+      - "traefik.http.services.dockhand.loadbalancer.server.port=5001"
+    logging: *logging-defaults
+
+networks:
+  proxy_net:
+    name: proxy_net
+  db_net:
+    name: db_net
+
+volumes:
+  netbird_data:
+  netbird_proxy_certs:
