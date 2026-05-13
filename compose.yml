@@ -53,8 +53,13 @@ services:
       - --certificatesresolvers.desec.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.desec.acme.dnschallenge=true
       - --certificatesresolvers.desec.acme.dnschallenge.provider=desec
+      - --certificatesresolvers.desec.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      - --certificatesresolvers.desec.acme.dnschallenge.delaybeforecheck=30
     environment:
       DESEC_TOKEN: ${DESEC_TOKEN:?deSEC token required}
+      DESEC_PROPAGATION_TIMEOUT: 600
+      DESEC_POLLING_INTERVAL: 10
+      DESEC_TTL: 60
       TZ: Europe/Oslo
     ports:
       - "80:80/tcp"
