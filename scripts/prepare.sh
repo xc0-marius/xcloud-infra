@@ -120,113 +120,51 @@ set_env PUBLIC_IP "46.225.19.105"
 set_env BASE_DOMAIN "xcloud.gg"
 set_env TZ "Europe/Oslo"
 
-if needs_env PG_PASS; then
-  set_env PG_PASS "$(rand_hex 32)"
-  echo "Generated PG_PASS."
-else
-  echo "Preserved PG_PASS."
-fi
-
-if needs_env AUTHENTIK_SECRET_KEY; then
-  set_env AUTHENTIK_SECRET_KEY "$(rand_b64 48)"
-  echo "Generated AUTHENTIK_SECRET_KEY."
-else
-  echo "Preserved AUTHENTIK_SECRET_KEY."
-fi
-
-if needs_env PGADMIN_DEFAULT_EMAIL; then
-  set_env PGADMIN_DEFAULT_EMAIL "$(ask_text "pgAdmin login email" "admin@xcloud.gg")"
-else
-  echo "Preserved PGADMIN_DEFAULT_EMAIL."
-fi
+if needs_env PG_PASS; then set_env PG_PASS "$(rand_hex 32)"; echo "Generated PG_PASS."; else echo "Preserved PG_PASS."; fi
+if needs_env AUTHENTIK_SECRET_KEY; then set_env AUTHENTIK_SECRET_KEY "$(rand_b64 48)"; echo "Generated AUTHENTIK_SECRET_KEY."; else echo "Preserved AUTHENTIK_SECRET_KEY."; fi
+if needs_env PGADMIN_DEFAULT_EMAIL; then set_env PGADMIN_DEFAULT_EMAIL "$(ask_text "pgAdmin login email" "admin@xcloud.gg")"; else echo "Preserved PGADMIN_DEFAULT_EMAIL."; fi
 
 if needs_env PGADMIN_DEFAULT_PASSWORD; then
   echo "Enter pgAdmin login password. Leave blank to generate a strong random value."
   pgadmin_value="$(ask_hidden_twice "pgAdmin password")"
-  if [[ -z "${pgadmin_value}" ]]; then
-    pgadmin_value="$(rand_hex 24)"
-    echo "Generated PGADMIN_DEFAULT_PASSWORD."
-  else
-    echo "Stored PGADMIN_DEFAULT_PASSWORD."
-  fi
+  if [[ -z "${pgadmin_value}" ]]; then pgadmin_value="$(rand_hex 24)"; echo "Generated PGADMIN_DEFAULT_PASSWORD."; else echo "Stored PGADMIN_DEFAULT_PASSWORD."; fi
   set_env PGADMIN_DEFAULT_PASSWORD "${pgadmin_value}"
   unset pgadmin_value
-else
-  echo "Preserved PGADMIN_DEFAULT_PASSWORD."
-fi
+else echo "Preserved PGADMIN_DEFAULT_PASSWORD."; fi
 
 if needs_env DESEC_TOKEN; then
   desec_value="$(ask_hidden "deSEC API token")"
-  if [[ -z "${desec_value}" ]]; then
-    echo "DESEC_TOKEN cannot be empty."
-    exit 1
-  fi
+  if [[ -z "${desec_value}" ]]; then echo "DESEC_TOKEN cannot be empty."; exit 1; fi
   set_env DESEC_TOKEN "${desec_value}"
   unset desec_value
-else
-  echo "Preserved DESEC_TOKEN."
-fi
+else echo "Preserved DESEC_TOKEN."; fi
 
-if needs_env NETBIRD_OWNER_EMAIL; then
-  set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird setup email" "admin@xcloud.gg")"
-else
-  echo "Preserved NETBIRD_OWNER_EMAIL."
-fi
+if needs_env NETBIRD_OWNER_EMAIL; then set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird setup email" "admin@xcloud.gg")"; else echo "Preserved NETBIRD_OWNER_EMAIL."; fi
 
 if needs_env NETBIRD_OWNER_PASSWORD; then
   echo "Enter NetBird setup password. Leave blank to generate a strong random value."
   netbird_owner_value="$(ask_hidden_twice "NetBird setup password")"
-  if [[ -z "${netbird_owner_value}" ]]; then
-    netbird_owner_value="$(rand_hex 24)"
-    echo "Generated NETBIRD_OWNER_PASSWORD."
-  else
-    echo "Stored NETBIRD_OWNER_PASSWORD."
-  fi
+  if [[ -z "${netbird_owner_value}" ]]; then netbird_owner_value="$(rand_hex 24)"; echo "Generated NETBIRD_OWNER_PASSWORD."; else echo "Stored NETBIRD_OWNER_PASSWORD."; fi
   set_env NETBIRD_OWNER_PASSWORD "${netbird_owner_value}"
   unset netbird_owner_value
-else
-  echo "Preserved NETBIRD_OWNER_PASSWORD."
-fi
+else echo "Preserved NETBIRD_OWNER_PASSWORD."; fi
 
-if needs_env NETBIRD_AUTH_SECRET; then
-  set_env NETBIRD_AUTH_SECRET "$(rand_hex 32)"
-  echo "Generated NETBIRD_AUTH_SECRET."
-fi
-
-if needs_env NETBIRD_STORE_ENCRYPTION_KEY; then
-  set_env NETBIRD_STORE_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr -d '\n')"
-  echo "Generated NETBIRD_STORE_ENCRYPTION_KEY."
-fi
-
-if needs_env NETBIRD_IDP_SESSION_KEY; then
-  set_env NETBIRD_IDP_SESSION_KEY "$(rand_hex 16)"
-  echo "Generated NETBIRD_IDP_SESSION_KEY."
-fi
-
-if needs_env NETBIRD_PROXY_TOKEN; then
-  set_env NETBIRD_PROXY_TOKEN "__GENERATE_ON_UP__"
-  echo "Marked NETBIRD_PROXY_TOKEN for automatic generation by up.sh."
-fi
+if needs_env NETBIRD_AUTH_SECRET; then set_env NETBIRD_AUTH_SECRET "$(rand_hex 32)"; echo "Generated NETBIRD_AUTH_SECRET."; fi
+if needs_env NETBIRD_STORE_ENCRYPTION_KEY; then set_env NETBIRD_STORE_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr -d '\n')"; echo "Generated NETBIRD_STORE_ENCRYPTION_KEY."; fi
+if needs_env NETBIRD_IDP_SESSION_KEY; then set_env NETBIRD_IDP_SESSION_KEY "$(rand_hex 16)"; echo "Generated NETBIRD_IDP_SESSION_KEY."; fi
+if needs_env NETBIRD_PROXY_TOKEN; then set_env NETBIRD_PROXY_TOKEN "__GENERATE_ON_UP__"; echo "Marked NETBIRD_PROXY_TOKEN for automatic generation by up.sh."; fi
 
 echo
 admin_user="$(ask_text "Basic Auth username for pgAdmin and Dockge" "xcloud")"
 admin_secret="$(ask_hidden_twice "Basic Auth password")"
-if [[ -z "${admin_secret}" ]]; then
-  echo "Basic Auth password cannot be empty."
-  exit 1
-fi
+if [[ -z "${admin_secret}" ]]; then echo "Basic Auth password cannot be empty."; exit 1; fi
 printf '%s\n' "${admin_secret}" | htpasswd -B -C 12 -n -i "${admin_user}" > "${AUTH_USERS_FILE}"
 unset admin_secret
 
 echo "Created ${AUTH_USERS_FILE}."
 
-if [[ -d acme/acme.json ]]; then
-  echo "acme/acme.json is a directory; remove it and rerun prepare.sh."
-  exit 1
-fi
-if [[ ! -f acme/acme.json ]]; then
-  install -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0600 /dev/null acme/acme.json
-fi
+if [[ -d acme/acme.json ]]; then echo "acme/acme.json is a directory; remove it and rerun prepare.sh."; exit 1; fi
+if [[ ! -f acme/acme.json ]]; then install -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0600 /dev/null acme/acme.json; fi
 chmod 0600 acme/acme.json
 chown "${STACK_USER}:${STACK_GROUP}" acme/acme.json
 
@@ -300,7 +238,7 @@ EOF
 
 proxy_token="$(get_env NETBIRD_PROXY_TOKEN)"
 cat > netbird/proxy.env <<EOF
-NB_PROXY_DOMAIN=netbird.xcloud.gg
+NB_PROXY_DOMAIN=nb.xcloud.gg
 NB_PROXY_TOKEN=${proxy_token}
 NB_PROXY_MANAGEMENT_ADDRESS=https://netbird.xcloud.gg:443
 NB_PROXY_ADDRESS=:8443
@@ -312,8 +250,7 @@ EOF
 
 unset netbird_auth_secret netbird_store_key netbird_session_key proxy_token
 
-chown -R "${STACK_USER}:${STACK_GROUP}" \
-  acme traefik redis authentik netbird teamspeak dockge scripts compose.yml .env.example
+chown -R "${STACK_USER}:${STACK_GROUP}" acme traefik redis authentik netbird teamspeak dockge scripts compose.yml .env.example
 chown -R "${STACK_USER}:${STACK_GROUP}" db
 chown -R "${POSTGRES_UID}:${POSTGRES_GID}" db/data
 chmod 0750 db
