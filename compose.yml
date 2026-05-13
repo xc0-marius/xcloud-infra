@@ -205,7 +205,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy_net"
       - "traefik.tcp.routers.netbird-proxy-passthrough.entrypoints=websecure"
-      - "traefik.tcp.routers.netbird-proxy-passthrough.rule=HostSNI(`nb.xcloud.gg`, `*.nb.xcloud.gg`)"
+      - "traefik.tcp.routers.netbird-proxy-passthrough.rule=HostSNI(`xc0.sh`, `*.xc0.sh`)"
       - "traefik.tcp.routers.netbird-proxy-passthrough.tls.passthrough=true"
       - "traefik.tcp.routers.netbird-proxy-passthrough.service=netbird-proxy-tls"
       - "traefik.tcp.routers.netbird-proxy-passthrough.priority=1"
