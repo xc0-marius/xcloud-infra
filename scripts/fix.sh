@@ -6,16 +6,6 @@ set -Eeuo pipefail
 # =========================================================
 # Safely repairs local runtime files, permissions, and generated
 # service config for the xCloud stack.
-#
-# Defaults are conservative:
-#   - existing .env secrets are preserved
-#   - secrets are generated only when missing or placeholder-like
-#   - app data is not deleted
-#   - NetBird owner/password is not written into config.yaml
-#
-# Usage:
-#   sudo /opt/xcloud-infra/scripts/fix.sh
-#   sudo /opt/xcloud-infra/scripts/fix.sh --rotate-secrets
 # =========================================================
 
 BASE="${BASE:-/opt/xcloud-infra}"
@@ -23,6 +13,8 @@ STACK_USER="${STACK_USER:-xcloud}"
 STACK_GROUP="${STACK_GROUP:-xcloud}"
 POSTGRES_UID="${POSTGRES_UID:-70}"
 POSTGRES_GID="${POSTGRES_GID:-70}"
+REDIS_UID="${REDIS_UID:-999}"
+REDIS_GID="${REDIS_GID:-999}"
 ENV_FILE="${BASE}/.env"
 AUTH_USERS_FILE="${BASE}/traefik/basic-auth.users"
 ROTATE_SECRETS=0
@@ -43,28 +35,17 @@ Environment:
   STACK_GROUP=xcloud
   POSTGRES_UID=70
   POSTGRES_GID=70
+  REDIS_UID=999
+  REDIS_GID=999
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --rotate-secrets)
-      ROTATE_SECRETS=1
-      shift
-      ;;
-    --non-interactive)
-      NON_INTERACTIVE=1
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1"
-      usage
-      exit 1
-      ;;
+    --rotate-secrets) ROTATE_SECRETS=1; shift ;;
+    --non-interactive) NON_INTERACTIVE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
 done
 
@@ -77,21 +58,13 @@ random_b64() { openssl rand -base64 "${1:-48}" | tr -d '\n'; }
 ask_text() {
   local label="$1" default_value="${2:-}" value=""
   if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then printf '%s' "${default_value}"; return 0; fi
-  if [[ -n "${default_value}" ]]; then
-    read -r -p "${label} [${default_value}]: " value
-    printf '%s' "${value:-${default_value}}"
-  else
-    read -r -p "${label}: " value
-    printf '%s' "${value}"
-  fi
+  if [[ -n "${default_value}" ]]; then read -r -p "${label} [${default_value}]: " value; printf '%s' "${value:-${default_value}}"; else read -r -p "${label}: " value; printf '%s' "${value}"; fi
 }
 
 ask_secret() {
   local label="$1" value=""
   if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then return 1; fi
-  read -r -s -p "${label}: " value
-  echo >&2
-  printf '%s' "${value}"
+  read -r -s -p "${label}: " value; echo >&2; printf '%s' "${value}"
 }
 
 ask_secret_twice() {
@@ -108,12 +81,7 @@ ask_secret_twice() {
 set_env() {
   local key="$1" value="$2" tmp=""
   tmp="$(mktemp)"
-  awk -v key="${key}" -v value="${value}" '
-    BEGIN { found = 0 }
-    $0 ~ "^" key "=" { print key "=" value; found = 1; next }
-    { print }
-    END { if (found == 0) print key "=" value }
-  ' "${ENV_FILE}" > "${tmp}"
+  awk -v key="${key}" -v value="${value}" 'BEGIN { found = 0 } $0 ~ "^" key "=" { print key "=" value; found = 1; next } { print } END { if (found == 0) print key "=" value }' "${ENV_FILE}" > "${tmp}"
   cat "${tmp}" > "${ENV_FILE}"
   rm -f "${tmp}"
 }
@@ -131,21 +99,13 @@ is_placeholder() {
 ensure_env_value() {
   local key="$1" value="$2" existing=""
   existing="$(get_env "${key}")"
-  if [[ "${ROTATE_SECRETS}" -eq 1 || $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then
-    set_env "${key}" "${value}"
-    log "Set ${key}."
-  else
-    log "Preserved ${key}."
-  fi
+  if [[ "${ROTATE_SECRETS}" -eq 1 || $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then set_env "${key}" "${value}"; log "Set ${key}."; else log "Preserved ${key}."; fi
 }
 
 ensure_prompt_value() {
   local key="$1" label="$2" default_value="${3:-}" existing="" value=""
   existing="$(get_env "${key}")"
-  if [[ "${ROTATE_SECRETS}" -ne 1 && ! $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then
-    log "Preserved ${key}."
-    return 0
-  fi
+  if [[ "${ROTATE_SECRETS}" -ne 1 && ! $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then log "Preserved ${key}."; return 0; fi
   value="$(ask_text "${label}" "${default_value}")"
   [[ -z "${value}" ]] && fail "${key} cannot be empty."
   set_env "${key}" "${value}"
@@ -155,10 +115,7 @@ ensure_prompt_value() {
 ensure_required_secret_prompt() {
   local key="$1" label="$2" existing="" value=""
   existing="$(get_env "${key}")"
-  if [[ "${ROTATE_SECRETS}" -ne 1 && ! $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then
-    log "Preserved ${key}."
-    return 0
-  fi
+  if [[ "${ROTATE_SECRETS}" -ne 1 && ! $(is_placeholder "${existing}"; echo $?) -eq 0 ]]; then log "Preserved ${key}."; return 0; fi
   value="$(ask_secret "${label}" || true)"
   [[ -z "${value}" ]] && fail "${key} is required."
   set_env "${key}" "${value}"
@@ -178,21 +135,19 @@ create_directories() {
   log "Creating required directory structure..."
   install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 \
     "${BASE}" "${BASE}/scripts" "${BASE}/acme" "${BASE}/traefik" \
-    "${BASE}/db" "${BASE}/redis/data" \
+    "${BASE}/db" "${BASE}/redis" \
     "${BASE}/authentik/media" "${BASE}/authentik/custom-templates" "${BASE}/authentik/certs" \
     "${BASE}/netbird/config" "${BASE}/netbird/certs" \
     "${BASE}/teamspeak/data" "${BASE}/pgadmin/data" "${BASE}/dockge/data" \
     "${BASE}/logs" "${BASE}/backups"
   install -d -o "${POSTGRES_UID}" -g "${POSTGRES_GID}" -m 0700 "${BASE}/db/data"
+  install -d -o "${REDIS_UID}" -g "${REDIS_GID}" -m 0700 "${BASE}/redis/data"
 }
 
 ensure_env_file() {
   log "Checking .env..."
   if [[ ! -f "${ENV_FILE}" ]]; then
-    if [[ -f "${BASE}/.env.example" ]]; then
-      cp "${BASE}/.env.example" "${ENV_FILE}"
-      log "Created .env from .env.example."
-    else
+    if [[ -f "${BASE}/.env.example" ]]; then cp "${BASE}/.env.example" "${ENV_FILE}"; log "Created .env from .env.example."; else
       cat > "${ENV_FILE}" <<'EOF'
 PUBLIC_IP=46.225.19.105
 BASE_DOMAIN=xcloud.gg
@@ -231,9 +186,7 @@ repair_env_values() {
     [[ -z "${pgadmin_pw}" ]] && pgadmin_pw="$(random_hex 24)" && log "Generated PGADMIN_DEFAULT_PASSWORD."
     set_env PGADMIN_DEFAULT_PASSWORD "${pgadmin_pw}"
     unset pgadmin_pw
-  else
-    log "Preserved PGADMIN_DEFAULT_PASSWORD."
-  fi
+  else log "Preserved PGADMIN_DEFAULT_PASSWORD."; fi
 
   ensure_required_secret_prompt DESEC_TOKEN "deSEC API token"
   ensure_prompt_value NETBIRD_OWNER_EMAIL "NetBird setup email" "admin@xcloud.gg"
@@ -244,20 +197,13 @@ repair_env_values() {
     [[ -z "${nb_pw}" ]] && nb_pw="$(random_hex 24)" && log "Generated NETBIRD_OWNER_PASSWORD."
     set_env NETBIRD_OWNER_PASSWORD "${nb_pw}"
     unset nb_pw
-  else
-    log "Preserved NETBIRD_OWNER_PASSWORD."
-  fi
+  else log "Preserved NETBIRD_OWNER_PASSWORD."; fi
 
   ensure_env_value NETBIRD_AUTH_SECRET "$(random_hex 32)"
   ensure_env_value NETBIRD_STORE_ENCRYPTION_KEY "$(openssl rand -base64 32 | tr -d '\n')"
   ensure_env_value NETBIRD_IDP_SESSION_KEY "$(random_hex 16)"
 
-  if [[ "${ROTATE_SECRETS}" -eq 1 || $(is_placeholder "$(get_env NETBIRD_PROXY_TOKEN)"; echo $?) -eq 0 ]]; then
-    set_env NETBIRD_PROXY_TOKEN "__GENERATE_ON_UP__"
-    log "Marked NETBIRD_PROXY_TOKEN for generation by up.sh."
-  else
-    log "Preserved NETBIRD_PROXY_TOKEN."
-  fi
+  if [[ "${ROTATE_SECRETS}" -eq 1 || $(is_placeholder "$(get_env NETBIRD_PROXY_TOKEN)"; echo $?) -eq 0 ]]; then set_env NETBIRD_PROXY_TOKEN "__GENERATE_ON_UP__"; log "Marked NETBIRD_PROXY_TOKEN for generation by up.sh."; else log "Preserved NETBIRD_PROXY_TOKEN."; fi
   chmod 0640 "${ENV_FILE}"
 }
 
@@ -280,9 +226,7 @@ repair_traefik_files() {
     printf '%s\n' "${basic_pw}" | htpasswd -B -C 12 -n -i "${basic_user}" > "${AUTH_USERS_FILE}"
     unset basic_pw
     log "Generated Traefik Basic Auth users file."
-  else
-    log "Preserved existing Traefik Basic Auth users file."
-  fi
+  else log "Preserved existing Traefik Basic Auth users file."; fi
 
   cat > "${BASE}/traefik/traefik-dynamic.yaml" <<'EOF'
 http:
@@ -310,6 +254,15 @@ repair_postgres_runtime_dir() {
   chmod 0750 "${BASE}/db"
   chown -R "${POSTGRES_UID}:${POSTGRES_GID}" "${BASE}/db/data"
   chmod 0700 "${BASE}/db/data"
+}
+
+repair_redis_runtime_dir() {
+  log "Repairing Redis runtime directory..."
+  find "${BASE}/redis/data" -mindepth 1 -maxdepth 1 -name '.gitkeep' -delete || true
+  chown "${STACK_USER}:${STACK_GROUP}" "${BASE}/redis"
+  chmod 0750 "${BASE}/redis"
+  chown -R "${REDIS_UID}:${REDIS_GID}" "${BASE}/redis/data"
+  chmod 0700 "${BASE}/redis/data"
 }
 
 write_netbird_config() {
@@ -377,7 +330,6 @@ NB_PROXY_ACME_CHALLENGE_TYPE=tls-alpn-01
 NB_PROXY_CERTIFICATE_DIRECTORY=/certs
 NB_LOG_LEVEL=info
 EOF
-
   unset nb_auth_secret nb_store_key nb_session_key nb_proxy_token
   chown -R "${STACK_USER}:${STACK_GROUP}" "${BASE}/netbird"
   chmod 0750 "${BASE}/netbird" "${BASE}/netbird/config" "${BASE}/netbird/certs"
@@ -387,7 +339,7 @@ EOF
 repair_permissions() {
   log "Repairing ownership and permissions..."
   chown -R "${STACK_USER}:${STACK_GROUP}" \
-    "${BASE}/acme" "${BASE}/traefik" "${BASE}/redis" "${BASE}/authentik" \
+    "${BASE}/acme" "${BASE}/traefik" "${BASE}/authentik" \
     "${BASE}/netbird" "${BASE}/teamspeak" "${BASE}/dockge" \
     "${BASE}/logs" "${BASE}/backups" "${BASE}/scripts" || true
 
@@ -395,17 +347,14 @@ repair_permissions() {
   [[ -f "${BASE}/compose.staging.yml" ]] && chown "${STACK_USER}:${STACK_GROUP}" "${BASE}/compose.staging.yml"
   [[ -f "${BASE}/.env.example" ]] && chown "${STACK_USER}:${STACK_GROUP}" "${BASE}/.env.example"
 
-  chown "${STACK_USER}:${STACK_GROUP}" "${BASE}/db"
-  chmod 0750 "${BASE}/db"
-  chown -R "${POSTGRES_UID}:${POSTGRES_GID}" "${BASE}/db/data"
-  chmod 0700 "${BASE}/db/data"
+  repair_postgres_runtime_dir
+  repair_redis_runtime_dir
 
   chown -R 5050:5050 "${BASE}/pgadmin/data" || true
 
-  find "${BASE}" -path "${BASE}/.git" -prune -o -path "${BASE}/db/data" -prune -o -type d -exec chmod 0750 {} +
-  find "${BASE}" -path "${BASE}/.git" -prune -o -path "${BASE}/db/data" -prune -o -type f -exec chmod 0640 {} +
+  find "${BASE}" -path "${BASE}/.git" -prune -o -path "${BASE}/db/data" -prune -o -path "${BASE}/redis/data" -prune -o -type d -exec chmod 0750 {} +
+  find "${BASE}" -path "${BASE}/.git" -prune -o -path "${BASE}/db/data" -prune -o -path "${BASE}/redis/data" -prune -o -type f -exec chmod 0640 {} +
   find "${BASE}/scripts" -type f -name '*.sh' -exec chmod 0750 {} +
-
   chmod 0640 "${ENV_FILE}"
   chmod 0600 "${BASE}/acme/acme.json" "${BASE}/acme/acme-staging.json"
   chmod 0640 "${AUTH_USERS_FILE}" "${BASE}/traefik/traefik-dynamic.yaml"
@@ -420,9 +369,7 @@ validate_compose() {
       docker compose --env-file "${ENV_FILE}" -f "${BASE}/compose.yml" -f "${BASE}/compose.staging.yml" config >/dev/null
     fi
     log "Docker Compose validation successful."
-  else
-    log "Docker is not installed or not in PATH; skipped Compose validation."
-  fi
+  else log "Docker is not installed or not in PATH; skipped Compose validation."; fi
 }
 
 main() {
@@ -435,6 +382,7 @@ main() {
   repair_acme_files
   repair_traefik_files
   repair_postgres_runtime_dir
+  repair_redis_runtime_dir
   write_netbird_config
   repair_permissions
   validate_compose
