@@ -21,3 +21,5 @@ services:
       - --certificatesresolvers.desec.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
       - --certificatesresolvers.desec.acme.dnschallenge=true
       - --certificatesresolvers.desec.acme.dnschallenge.provider=desec
+      - --certificatesresolvers.desec.acme.dnschallenge.resolvers=1.1.1.1:53,8.8.8.8:53
+      - --certificatesresolvers.desec.acme.dnschallenge.delaybeforecheck=30
