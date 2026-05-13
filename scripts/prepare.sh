@@ -4,6 +4,8 @@ set -Eeuo pipefail
 BASE="${1:-/opt/xcloud-infra}"
 STACK_USER="${STACK_USER:-xcloud}"
 STACK_GROUP="${STACK_GROUP:-xcloud}"
+POSTGRES_UID="${POSTGRES_UID:-70}"
+POSTGRES_GID="${POSTGRES_GID:-70}"
 ENV_FILE="${BASE}/.env"
 AUTH_USERS_FILE="${BASE}/traefik/basic-auth.users"
 
@@ -31,7 +33,9 @@ need_cmd htpasswd "sudo apt-get update && sudo apt-get install -y apache2-utils"
 cd "${BASE}"
 
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 acme traefik scripts
-install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 db/data redis/data
+install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 db
+install -d -o "${POSTGRES_UID}" -g "${POSTGRES_GID}" -m 0700 db/data
+install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 redis/data
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 authentik/media authentik/custom-templates authentik/certs
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 netbird/config netbird/certs
 install -d -o "${STACK_USER}" -g "${STACK_GROUP}" -m 0750 teamspeak/data pgadmin/data dockge/data
@@ -163,7 +167,6 @@ else
   echo "Preserved DESEC_TOKEN."
 fi
 
-# Kept in .env for optional manual/API setup only. Do not write this into config.yaml.
 if needs_env NETBIRD_OWNER_EMAIL; then
   set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird setup email" "admin@xcloud.gg")"
 else
@@ -310,13 +313,17 @@ EOF
 unset netbird_auth_secret netbird_store_key netbird_session_key proxy_token
 
 chown -R "${STACK_USER}:${STACK_GROUP}" \
-  acme traefik db redis authentik netbird teamspeak dockge scripts compose.yml .env.example
+  acme traefik redis authentik netbird teamspeak dockge scripts compose.yml .env.example
+chown -R "${STACK_USER}:${STACK_GROUP}" db
+chown -R "${POSTGRES_UID}:${POSTGRES_GID}" db/data
+chmod 0750 db
+chmod 0700 db/data
 
 chown "${STACK_USER}:${STACK_GROUP}" "${ENV_FILE}"
 chown -R 5050:5050 pgadmin/data
 
-find . -type d -not -path './.git*' -exec chmod 0750 {} +
-find . -type f -not -path './.git*' -exec chmod 0640 {} +
+find . -type d -not -path './.git*' -not -path './db/data*' -exec chmod 0750 {} +
+find . -type f -not -path './.git*' -not -path './db/data*' -exec chmod 0640 {} +
 find scripts -type f -name '*.sh' -exec chmod 0750 {} +
 chmod 0600 acme/acme.json
 chmod 0640 "${AUTH_USERS_FILE}" "${ENV_FILE}"
