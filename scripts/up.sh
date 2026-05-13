@@ -4,10 +4,13 @@ set -Eeuo pipefail
 BASE="/opt/xcloud-infra"
 COMPOSE_FILE="${BASE}/compose.yml"
 ENV_FILE="${BASE}/.env"
-LOCK_FILE="/tmp/xcloud-infra-stack.lock"
+LOCK_FILE="${BASE}/.xcloud-infra-stack.lock"
 COMPOSE_EXTRA_FILES="${COMPOSE_EXTRA_FILES:-}"
 
 cd "${BASE}"
+
+touch "${LOCK_FILE}"
+chmod 0640 "${LOCK_FILE}"
 
 COMPOSE_ARGS=(--env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 if [[ -n "${COMPOSE_EXTRA_FILES}" ]]; then
@@ -147,7 +150,6 @@ NB_PROXY_CERTIFICATE_DIRECTORY=/certs
 NB_LOG_LEVEL=info
 EOF
 
-  chown xcloud:xcloud "${BASE}/netbird/proxy.env"
   chmod 0640 "${BASE}/netbird/proxy.env"
 }
 
