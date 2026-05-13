@@ -140,7 +140,7 @@ sync_netbird_proxy_env() {
   token="$(get_env NETBIRD_PROXY_TOKEN)"
 
   cat > "${BASE}/netbird/proxy.env" <<EOF
-NB_PROXY_DOMAIN=netbird.xcloud.gg
+NB_PROXY_DOMAIN=nb.xcloud.gg
 NB_PROXY_TOKEN=${token}
 NB_PROXY_MANAGEMENT_ADDRESS=https://netbird.xcloud.gg:443
 NB_PROXY_ADDRESS=:8443
