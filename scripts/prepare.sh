@@ -163,15 +163,16 @@ else
   echo "Preserved DESEC_TOKEN."
 fi
 
+# Kept in .env for optional manual/API setup only. Do not write this into config.yaml.
 if needs_env NETBIRD_OWNER_EMAIL; then
-  set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird initial admin email" "admin@xcloud.gg")"
+  set_env NETBIRD_OWNER_EMAIL "$(ask_text "NetBird setup email" "admin@xcloud.gg")"
 else
   echo "Preserved NETBIRD_OWNER_EMAIL."
 fi
 
 if needs_env NETBIRD_OWNER_PASSWORD; then
-  echo "Enter NetBird initial admin password. Leave blank to generate a strong random value."
-  netbird_owner_value="$(ask_hidden_twice "NetBird admin password")"
+  echo "Enter NetBird setup password. Leave blank to generate a strong random value."
+  netbird_owner_value="$(ask_hidden_twice "NetBird setup password")"
   if [[ -z "${netbird_owner_value}" ]]; then
     netbird_owner_value="$(rand_hex 24)"
     echo "Generated NETBIRD_OWNER_PASSWORD."
@@ -242,8 +243,6 @@ http:
         contentTypeNosniff: true
 EOF
 
-netbird_owner_email="$(get_env NETBIRD_OWNER_EMAIL)"
-netbird_owner_password="$(get_env NETBIRD_OWNER_PASSWORD)"
 netbird_auth_secret="$(get_env NETBIRD_AUTH_SECRET)"
 netbird_store_key="$(get_env NETBIRD_STORE_ENCRYPTION_KEY)"
 netbird_session_key="$(get_env NETBIRD_IDP_SESSION_KEY)"
@@ -273,9 +272,6 @@ server:
       - "https://netbird.xcloud.gg/nb-silent-auth"
     cliRedirectURIs:
       - "http://localhost:53000/"
-    owner:
-      email: "${netbird_owner_email}"
-      password: "${netbird_owner_password}"
 
   store:
     engine: "sqlite"
@@ -303,17 +299,15 @@ proxy_token="$(get_env NETBIRD_PROXY_TOKEN)"
 cat > netbird/proxy.env <<EOF
 NB_PROXY_DOMAIN=netbird.xcloud.gg
 NB_PROXY_TOKEN=${proxy_token}
-NB_PROXY_MANAGEMENT_ADDRESS=http://netbird-server:80
-NB_PROXY_ALLOW_INSECURE=true
+NB_PROXY_MANAGEMENT_ADDRESS=https://netbird.xcloud.gg:443
 NB_PROXY_ADDRESS=:8443
 NB_PROXY_ACME_CERTIFICATES=true
 NB_PROXY_ACME_CHALLENGE_TYPE=tls-alpn-01
 NB_PROXY_CERTIFICATE_DIRECTORY=/certs
-NB_PROXY_FORWARDED_PROTO=https
 NB_LOG_LEVEL=info
 EOF
 
-unset netbird_owner_password netbird_auth_secret netbird_store_key netbird_session_key proxy_token
+unset netbird_auth_secret netbird_store_key netbird_session_key proxy_token
 
 chown -R "${STACK_USER}:${STACK_GROUP}" \
   acme traefik db redis authentik netbird teamspeak dockge scripts compose.yml .env.example
